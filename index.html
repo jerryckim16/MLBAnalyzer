@@ -301,7 +301,7 @@
         <div class="search-results" id="salaryResults"></div>
       </div>
     </div>
-    <p style="color:var(--muted);font-size:0.8rem;margin-bottom:1rem;">Salary data covers 1985–2016.</p>
+    <p style="color:var(--muted);font-size:0.8rem;margin-bottom:1rem;">Salary data covers 1985–2023.</p>
     <div id="salaryContent"></div>
     <div style="margin-top:1.5rem;">
       <div class="controls">
@@ -783,7 +783,7 @@
       const salYears = Object.keys(pSalary).map(Number).sort((a, b) => a - b);
 
       if (salYears.length === 0) {
-        document.getElementById('salaryContent').innerHTML = `<div class="player-header"><h2>${p.nameFirst} ${p.nameLast}</h2><div class="meta">No salary data available for this player (data covers 1985–2016).</div></div>`;
+        document.getElementById('salaryContent').innerHTML = `<div class="player-header"><h2>${p.nameFirst} ${p.nameLast}</h2><div class="meta">No salary data available for this player (data covers 1985–2023).</div></div>`;
         return;
       }
 
