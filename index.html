@@ -366,51 +366,65 @@
 
     async function init() {
       const el = document.getElementById('loadingText');
-      el.textContent = 'Loading People...';
-      people = await loadCSV('data/People.csv');
-      el.textContent = 'Loading Batting...';
-      batting = await loadCSV('data/Batting.csv');
-      el.textContent = 'Loading Pitching...';
-      pitching = await loadCSV('data/Pitching.csv');
-      el.textContent = 'Loading Teams...';
-      teams = await loadCSV('data/Teams.csv');
-      el.textContent = 'Loading Salaries...';
-      salaries = await loadCSV('data/Salaries.csv');
+      try {
+        el.textContent = 'Loading People...';
+        people = await loadCSV('data/People.csv');
+        el.textContent = 'Loading Batting...';
+        batting = await loadCSV('data/Batting.csv');
+        el.textContent = 'Loading Pitching...';
+        pitching = await loadCSV('data/Pitching.csv');
+        el.textContent = 'Loading Teams...';
+        teams = await loadCSV('data/Teams.csv');
+        el.textContent = 'Loading Salaries...';
+        salaries = await loadCSV('data/Salaries.csv');
 
-      people.forEach(p => { if (p.playerID) peopleMap[p.playerID] = p; });
+        console.log('Data loaded — People:', people.length, 'Batting:', batting.length, 'Pitching:', pitching.length, 'Salaries:', salaries.length);
 
-      // Build salary lookup: playerID -> { year -> salary }
-      salaryMap = {};
-      salaries.forEach(s => {
-        if (!s.playerID) return;
-        if (!salaryMap[s.playerID]) salaryMap[s.playerID] = {};
-        salaryMap[s.playerID][s.yearID] = (salaryMap[s.playerID][s.yearID] || 0) + (s.salary || 0);
-      });
+        people.forEach(p => { if (p.playerID) peopleMap[p.playerID] = p; });
 
-      // Populate leader year select
-      const years = [...new Set(batting.map(b => b.yearID).filter(Boolean))].sort((a, b) => b - a);
-      const sel = document.getElementById('leaderYear');
-      years.forEach(y => { const o = document.createElement('option'); o.value = y; o.textContent = y; sel.appendChild(o); });
+        // Build salary lookup: playerID -> { year -> salary }
+        salaryMap = {};
+        salaries.forEach(s => {
+          if (!s.playerID) return;
+          if (!salaryMap[s.playerID]) salaryMap[s.playerID] = {};
+          salaryMap[s.playerID][s.yearID] = (salaryMap[s.playerID][s.yearID] || 0) + (s.salary || 0);
+        });
+        console.log('Salary map built — players with salary:', Object.keys(salaryMap).length);
 
-      // Populate value year select (salary years only)
-      const salYears = [...new Set(salaries.map(s => s.yearID).filter(Boolean))].sort((a, b) => b - a);
-      const valSel = document.getElementById('valueYear');
-      salYears.forEach(y => { const o = document.createElement('option'); o.value = y; o.textContent = y; valSel.appendChild(o); });
+        // Populate leader year select
+        const years = [...new Set(batting.map(b => b.yearID).filter(Boolean))].sort((a, b) => b - a);
+        const sel = document.getElementById('leaderYear');
+        years.forEach(y => { const o = document.createElement('option'); o.value = y; o.textContent = y; sel.appendChild(o); });
 
-      document.getElementById('loading').classList.add('hidden');
-      renderOverview();
-      renderValueLeaders();
-      setupTabs();
-      setupSearch();
+        // Populate value year select (salary years only)
+        const salYears = [...new Set(salaries.map(s => s.yearID).filter(Boolean))].sort((a, b) => b - a);
+        const valSel = document.getElementById('valueYear');
+        salYears.forEach(y => { const o = document.createElement('option'); o.value = y; o.textContent = y; valSel.appendChild(o); });
+
+        document.getElementById('loading').classList.add('hidden');
+        renderOverview();
+        setupTabs();
+        setupSearch();
+        console.log('Init complete');
+      } catch(e) {
+        console.error('Init error:', e);
+        el.textContent = 'Error loading data: ' + e.message;
+      }
     }
 
     function setupTabs() {
+      let valueInitialized = false;
       document.querySelectorAll('.tab').forEach(tab => {
         tab.addEventListener('click', () => {
           document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
           document.querySelectorAll('.dashboard').forEach(d => d.classList.remove('active'));
           tab.classList.add('active');
           document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+          // Render value leaders on first visit (chart needs visible container)
+          if (tab.dataset.tab === 'value' && !valueInitialized) {
+            valueInitialized = true;
+            try { renderValueLeaders(); } catch(e) { console.error('Value tab error:', e); }
+          }
         });
       });
     }
@@ -806,7 +820,11 @@
     }
 
     function renderValue() {
-      if (!selectedValuePlayer) return;
+      if (!selectedValuePlayer) {
+        console.log('renderValue: no player selected');
+        return;
+      }
+      console.log('renderValue: player', selectedValuePlayer);
       const p = peopleMap[selectedValuePlayer];
       const pSalary = salaryMap[selectedValuePlayer] || {};
       const salYears = Object.keys(pSalary).map(Number).sort((a, b) => a - b);
@@ -909,9 +927,11 @@
 
     function renderValueLeaders() {
       const year = +document.getElementById('valueYear').value;
+      console.log('renderValueLeaders: year', year, 'salaries count:', salaries.length);
 
       // Get all players with salary that year
       const salYear = salaries.filter(s => s.yearID === year && s.salary > 0);
+      console.log('salYear matches:', salYear.length);
       const playerSeasons = salYear.map(s => {
         const stats = getPlayerSeasonStats(s.playerID, year);
         const war = approxBattingWAR(stats);
