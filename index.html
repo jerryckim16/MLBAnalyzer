@@ -215,10 +215,14 @@
     </div>
     <div class="stat-cards" id="overviewStats"></div>
     <div class="grid">
+      <div class="card"><h3>OPS Over Time (League Avg)</h3><canvas id="chartOPS"></canvas></div>
+      <div class="card"><h3>OBP vs SLG Over Time (League Avg)</h3><canvas id="chartOBPSLG"></canvas></div>
+      <div class="card"><h3>BABIP Over Time (League Avg)</h3><canvas id="chartBABIP"></canvas></div>
+      <div class="card"><h3>ISO (Isolated Power) Over Time</h3><canvas id="chartISO"></canvas></div>
+      <div class="card"><h3>K% vs BB% Over Time</h3><canvas id="chartKBB"></canvas></div>
+      <div class="card"><h3>HR/AB Rate Over Time</h3><canvas id="chartHRAB"></canvas></div>
+      <div class="card"><h3>ERA vs WHIP Over Time (League Avg)</h3><canvas id="chartERAWHIP"></canvas></div>
       <div class="card"><h3>Home Runs Per Year (League Total)</h3><canvas id="chartHR"></canvas></div>
-      <div class="card"><h3>Batting Average Over Time (League Avg)</h3><canvas id="chartBA"></canvas></div>
-      <div class="card"><h3>Strikeouts vs Walks (League Total)</h3><canvas id="chartSOBB"></canvas></div>
-      <div class="card"><h3>ERA Over Time (League Avg)</h3><canvas id="chartERA"></canvas></div>
     </div>
   </div>
 
@@ -370,78 +374,160 @@
       const bat = batting.filter(b => b.yearID >= yFrom && b.yearID <= yTo);
       const pit = pitching.filter(p => p.yearID >= yFrom && p.yearID <= yTo);
 
-      // Aggregate by year
+      // Aggregate by year — include sabermetric components
       const byYear = {};
       bat.forEach(b => {
         const y = b.yearID;
-        if (!byYear[y]) byYear[y] = { HR: 0, H: 0, AB: 0, BB: 0, SO: 0, R: 0, players: new Set() };
-        byYear[y].HR += (b.HR || 0);
-        byYear[y].H += (b.H || 0);
-        byYear[y].AB += (b.AB || 0);
-        byYear[y].BB += (b.BB || 0);
-        byYear[y].SO += (b.SO || 0);
-        byYear[y].R += (b.R || 0);
-        if (b.playerID) byYear[y].players.add(b.playerID);
+        if (!byYear[y]) byYear[y] = { HR: 0, H: 0, AB: 0, BB: 0, SO: 0, R: 0, '2B': 0, '3B': 0, HBP: 0, SF: 0, SB: 0, CS: 0, PA: 0, players: new Set() };
+        const d = byYear[y];
+        d.HR  += (b.HR  || 0);
+        d.H   += (b.H   || 0);
+        d.AB  += (b.AB  || 0);
+        d.BB  += (b.BB  || 0);
+        d.SO  += (b.SO  || 0);
+        d.R   += (b.R   || 0);
+        d['2B'] += (b['2B'] || 0);
+        d['3B'] += (b['3B'] || 0);
+        d.HBP += (b.HBP || 0);
+        d.SF  += (b.SF  || 0);
+        d.SB  += (b.SB  || 0);
+        d.CS  += (b.CS  || 0);
+        // PA = AB + BB + HBP + SF (SH excluded as it's often missing and pitcher-driven)
+        d.PA  += (b.AB || 0) + (b.BB || 0) + (b.HBP || 0) + (b.SF || 0);
+        if (b.playerID) d.players.add(b.playerID);
       });
 
       const eraByYear = {};
       pit.forEach(p => {
         const y = p.yearID;
-        if (!eraByYear[y]) eraByYear[y] = { totalER: 0, totalIP: 0 };
+        if (!eraByYear[y]) eraByYear[y] = { totalER: 0, totalIP: 0, H: 0, BB: 0, SO: 0 };
         eraByYear[y].totalER += (p.ER || 0);
         eraByYear[y].totalIP += (p.IPouts || 0) / 3;
+        eraByYear[y].H  += (p.H  || 0);
+        eraByYear[y].BB += (p.BB || 0);
+        eraByYear[y].SO += (p.SO || 0);
       });
 
       const years = Object.keys(byYear).map(Number).sort((a, b) => a - b);
-      const hrData = years.map(y => byYear[y].HR);
-      const baData = years.map(y => byYear[y].AB > 0 ? (byYear[y].H / byYear[y].AB).toFixed(3) : 0);
-      const soData = years.map(y => byYear[y].SO);
-      const bbData = years.map(y => byYear[y].BB);
-      const eraYears = Object.keys(eraByYear).map(Number).sort((a, b) => a - b);
-      const eraData = eraYears.map(y => eraByYear[y].totalIP > 0 ? ((eraByYear[y].totalER / eraByYear[y].totalIP) * 9).toFixed(2) : 0);
 
-      // Stat cards
+      // Derived sabermetric stats per year
+      function calcOBP(d) { return d.PA > 0 ? (d.H + d.BB + d.HBP) / d.PA : 0; }
+      function calcSLG(d) {
+        if (d.AB === 0) return 0;
+        const tb = (d.H - d['2B'] - d['3B'] - d.HR) + 2 * d['2B'] + 3 * d['3B'] + 4 * d.HR;
+        return tb / d.AB;
+      }
+      function calcBABIP(d) {
+        const denom = d.AB - d.SO - d.HR + d.SF;
+        return denom > 0 ? (d.H - d.HR) / denom : 0;
+      }
+      function calcISO(d) { return d.AB > 0 ? calcSLG(d) - (d.H / d.AB) : 0; }
+
+      const opsData   = years.map(y => +(calcOBP(byYear[y]) + calcSLG(byYear[y])).toFixed(3));
+      const obpData   = years.map(y => +calcOBP(byYear[y]).toFixed(3));
+      const slgData   = years.map(y => +calcSLG(byYear[y]).toFixed(3));
+      const babipData = years.map(y => +calcBABIP(byYear[y]).toFixed(3));
+      const isoData   = years.map(y => +calcISO(byYear[y]).toFixed(3));
+      const kPctData  = years.map(y => byYear[y].PA > 0 ? +(byYear[y].SO / byYear[y].PA * 100).toFixed(1) : 0);
+      const bbPctData = years.map(y => byYear[y].PA > 0 ? +(byYear[y].BB / byYear[y].PA * 100).toFixed(1) : 0);
+      const hrAbData  = years.map(y => byYear[y].AB > 0 ? +(byYear[y].HR / byYear[y].AB * 100).toFixed(2) : 0);
+      const hrData    = years.map(y => byYear[y].HR);
+
+      const eraYears = Object.keys(eraByYear).map(Number).sort((a, b) => a - b);
+      const eraData  = eraYears.map(y => eraByYear[y].totalIP > 0 ? +((eraByYear[y].totalER / eraByYear[y].totalIP) * 9).toFixed(2) : 0);
+      const whipData = eraYears.map(y => eraByYear[y].totalIP > 0 ? +((eraByYear[y].H + eraByYear[y].BB) / eraByYear[y].totalIP).toFixed(3) : 0);
+
+      // Stat cards — show period averages for sabermetric stats
       const totalHR = Object.values(byYear).reduce((s, v) => s + v.HR, 0);
-      const totalH = Object.values(byYear).reduce((s, v) => s + v.H, 0);
-      const totalR = Object.values(byYear).reduce((s, v) => s + v.R, 0);
       const uniquePlayers = new Set(); Object.values(byYear).forEach(v => v.players.forEach(p => uniquePlayers.add(p)));
+      const avgOPS  = (opsData.reduce((a, b) => a + b, 0)   / opsData.length).toFixed(3);
+      const avgOBP  = (obpData.reduce((a, b) => a + b, 0)   / obpData.length).toFixed(3);
+      const avgSLG  = (slgData.reduce((a, b) => a + b, 0)   / slgData.length).toFixed(3);
+      const avgBABIP= (babipData.reduce((a, b) => a + b, 0) / babipData.length).toFixed(3);
+      const avgKPct = (kPctData.reduce((a, b) => a + b, 0)  / kPctData.length).toFixed(1);
+      const avgBBPct= (bbPctData.reduce((a, b) => a + b, 0) / bbPctData.length).toFixed(1);
 
       document.getElementById('overviewStats').innerHTML = `
-        <div class="stat-card"><div class="label">Total Home Runs</div><div class="value">${totalHR.toLocaleString()}</div></div>
-        <div class="stat-card"><div class="label">Total Hits</div><div class="value">${totalH.toLocaleString()}</div></div>
-        <div class="stat-card"><div class="label">Total Runs</div><div class="value">${totalR.toLocaleString()}</div></div>
+        <div class="stat-card"><div class="label">Avg OPS</div><div class="value">${avgOPS}</div></div>
+        <div class="stat-card"><div class="label">Avg OBP</div><div class="value">${avgOBP}</div></div>
+        <div class="stat-card"><div class="label">Avg SLG</div><div class="value">${avgSLG}</div></div>
+        <div class="stat-card"><div class="label">Avg BABIP</div><div class="value">${avgBABIP}</div></div>
+        <div class="stat-card"><div class="label">Avg K%</div><div class="value">${avgKPct}%</div></div>
+        <div class="stat-card"><div class="label">Avg BB%</div><div class="value">${avgBBPct}%</div></div>
+        <div class="stat-card"><div class="label">Total HR</div><div class="value">${totalHR.toLocaleString()}</div></div>
         <div class="stat-card"><div class="label">Unique Players</div><div class="value">${uniquePlayers.size.toLocaleString()}</div></div>
-        <div class="stat-card"><div class="label">Seasons Covered</div><div class="value">${years.length}</div></div>
       `;
+
+      // --- Charts ---
+      makeChart('chartOPS', {
+        type: 'line', data: {
+          labels: years,
+          datasets: [{ label: 'OPS', data: opsData, borderColor: COLORS.accent, backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3, pointRadius: 0 }]
+        }, options: { ...chartDefaults }
+      });
+
+      makeChart('chartOBPSLG', {
+        type: 'line', data: {
+          labels: years,
+          datasets: [
+            { label: 'OBP', data: obpData, borderColor: COLORS.accent3, tension: 0.3, pointRadius: 0 },
+            { label: 'SLG', data: slgData, borderColor: COLORS.accent2, tension: 0.3, pointRadius: 0 }
+          ]
+        }, options: { ...chartDefaults }
+      });
+
+      makeChart('chartBABIP', {
+        type: 'line', data: {
+          labels: years,
+          datasets: [{ label: 'BABIP', data: babipData, borderColor: COLORS.accent3, backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3, pointRadius: 0 }]
+        }, options: { ...chartDefaults }
+      });
+
+      makeChart('chartISO', {
+        type: 'line', data: {
+          labels: years,
+          datasets: [{ label: 'ISO', data: isoData, borderColor: COLORS.accent4, backgroundColor: 'rgba(251,191,36,0.1)', fill: true, tension: 0.3, pointRadius: 0 }]
+        }, options: { ...chartDefaults }
+      });
+
+      makeChart('chartKBB', {
+        type: 'line', data: {
+          labels: years,
+          datasets: [
+            { label: 'K%', data: kPctData, borderColor: COLORS.accent2, tension: 0.3, pointRadius: 0 },
+            { label: 'BB%', data: bbPctData, borderColor: COLORS.accent4, tension: 0.3, pointRadius: 0 }
+          ]
+        }, options: { ...chartDefaults, scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, title: { display: true, text: '%', color: COLORS.gridText } } } }
+      });
+
+      makeChart('chartHRAB', {
+        type: 'line', data: {
+          labels: years,
+          datasets: [{ label: 'HR/AB %', data: hrAbData, borderColor: COLORS.accent, backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3, pointRadius: 0 }]
+        }, options: { ...chartDefaults, scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, title: { display: true, text: '%', color: COLORS.gridText } } } }
+      });
+
+      makeChart('chartERAWHIP', {
+        type: 'line', data: {
+          labels: eraYears,
+          datasets: [
+            { label: 'ERA', data: eraData, borderColor: COLORS.accent4, tension: 0.3, pointRadius: 0, yAxisID: 'y' },
+            { label: 'WHIP', data: whipData, borderColor: COLORS.accent2, tension: 0.3, pointRadius: 0, yAxisID: 'y1' }
+          ]
+        }, options: {
+          ...chartDefaults,
+          scales: {
+            x: chartDefaults.scales.x,
+            y:  { position: 'left',  ticks: { color: COLORS.gridText }, grid: { color: COLORS.grid }, title: { display: true, text: 'ERA', color: COLORS.gridText } },
+            y1: { position: 'right', ticks: { color: COLORS.gridText }, grid: { drawOnChartArea: false }, title: { display: true, text: 'WHIP', color: COLORS.gridText } }
+          }
+        }
+      });
 
       makeChart('chartHR', {
         type: 'line', data: {
           labels: years,
           datasets: [{ label: 'Home Runs', data: hrData, borderColor: COLORS.accent, backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3, pointRadius: 0 }]
-        }, options: { ...chartDefaults }
-      });
-
-      makeChart('chartBA', {
-        type: 'line', data: {
-          labels: years,
-          datasets: [{ label: 'Batting Avg', data: baData, borderColor: COLORS.accent3, backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3, pointRadius: 0 }]
-        }, options: { ...chartDefaults }
-      });
-
-      makeChart('chartSOBB', {
-        type: 'line', data: {
-          labels: years,
-          datasets: [
-            { label: 'Strikeouts', data: soData, borderColor: COLORS.accent2, tension: 0.3, pointRadius: 0 },
-            { label: 'Walks', data: bbData, borderColor: COLORS.accent4, tension: 0.3, pointRadius: 0 }
-          ]
-        }, options: { ...chartDefaults }
-      });
-
-      makeChart('chartERA', {
-        type: 'line', data: {
-          labels: eraYears,
-          datasets: [{ label: 'ERA', data: eraData, borderColor: COLORS.accent4, backgroundColor: 'rgba(251,191,36,0.1)', fill: true, tension: 0.3, pointRadius: 0 }]
         }, options: { ...chartDefaults }
       });
     }
