@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lahman Baseball Stats Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --border: #334155;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent2: #f472b6;
+      --accent3: #34d399;
+      --accent4: #fbbf24;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1.25rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    header h1 { font-size: 1.5rem; font-weight: 700; }
+    header h1 span { color: var(--accent); }
+    .loading-overlay {
+      position: fixed; inset: 0;
+      background: var(--bg);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 999;
+      transition: opacity 0.4s;
+    }
+    .loading-overlay.hidden { opacity: 0; pointer-events: none; }
+    .spinner {
+      width: 48px; height: 48px;
+      border: 4px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-overlay p { margin-top: 1rem; color: var(--muted); }
+
+    .tabs {
+      display: flex; gap: 0;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+    }
+    .tab {
+      padding: 0.75rem 1.5rem;
+      cursor: pointer;
+      color: var(--muted);
+      border-bottom: 2px solid transparent;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    .dashboard { padding: 1.5rem 2rem; display: none; }
+    .dashboard.active { display: block; }
+
+    .controls {
+      display: flex; flex-wrap: wrap; gap: 1rem;
+      margin-bottom: 1.5rem;
+      align-items: end;
+    }
+    .control-group { display: flex; flex-direction: column; gap: 0.3rem; }
+    .control-group label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    select, input {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      min-width: 180px;
+    }
+    select:focus, input:focus { outline: none; border-color: var(--accent); }
+    button {
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      padding: 0.5rem 1.25rem;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover { opacity: 0.9; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+      gap: 1.5rem;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+    }
+    .card h3 {
+      font-size: 0.95rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .card canvas { width: 100% !important; }
+
+    .stat-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+    }
+    .stat-card .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; }
+    .stat-card .value { font-size: 1.75rem; font-weight: 700; color: var(--accent); margin-top: 0.25rem; }
+
+    .player-header {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+    .player-header h2 { font-size: 1.4rem; }
+    .player-header .meta { color: var(--muted); margin-top: 0.25rem; font-size: 0.9rem; }
+
+    .table-wrapper { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+    th, td {
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
+    tr:hover td { background: rgba(56, 189, 248, 0.05); }
+
+    .search-results {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      max-height: 200px;
+      overflow-y: auto;
+      position: absolute;
+      z-index: 10;
+      width: 300px;
+      display: none;
+    }
+    .search-results.show { display: block; }
+    .search-results div {
+      padding: 0.5rem 0.75rem;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+    }
+    .search-results div:hover { background: rgba(56, 189, 248, 0.1); }
+    .search-wrap { position: relative; }
+  </style>
+</head>
+<body>
+  <div class="loading-overlay" id="loading">
+    <div class="spinner"></div>
+    <p id="loadingText">Loading baseball data...</p>
+  </div>
+
+  <header>
+    <h1><span>&#9918;</span> Lahman Baseball <span>Dashboard</span></h1>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="overview">League Overview</div>
+    <div class="tab" data-tab="player">Player Lookup</div>
+    <div class="tab" data-tab="leaders">Leaderboards</div>
+    <div class="tab" data-tab="compare">Compare Players</div>
+  </div>
+
+  <!-- OVERVIEW TAB -->
+  <div class="dashboard active" id="tab-overview">
+    <div class="controls">
+      <div class="control-group">
+        <label>Year Range</label>
+        <div style="display:flex;gap:0.5rem;">
+          <input type="number" id="overviewYearFrom" value="1900" min="1871" max="2016" style="min-width:90px">
+          <span style="align-self:center;color:var(--muted);">to</span>
+          <input type="number" id="overviewYearTo" value="2016" min="1871" max="2016" style="min-width:90px">
+        </div>
+      </div>
+      <button onclick="renderOverview()">Update</button>
+    </div>
+    <div class="stat-cards" id="overviewStats"></div>
+    <div class="grid">
+      <div class="card"><h3>Home Runs Per Year (League Total)</h3><canvas id="chartHR"></canvas></div>
+      <div class="card"><h3>Batting Average Over Time (League Avg)</h3><canvas id="chartBA"></canvas></div>
+      <div class="card"><h3>Strikeouts vs Walks (League Total)</h3><canvas id="chartSOBB"></canvas></div>
+      <div class="card"><h3>ERA Over Time (League Avg)</h3><canvas id="chartERA"></canvas></div>
+    </div>
+  </div>
+
+  <!-- PLAYER TAB -->
+  <div class="dashboard" id="tab-player">
+    <div class="controls">
+      <div class="control-group search-wrap">
+        <label>Search Player</label>
+        <input type="text" id="playerSearch" placeholder="e.g. Babe Ruth" autocomplete="off">
+        <div class="search-results" id="playerResults"></div>
+      </div>
+    </div>
+    <div id="playerContent"></div>
+  </div>
+
+  <!-- LEADERS TAB -->
+  <div class="dashboard" id="tab-leaders">
+    <div class="controls">
+      <div class="control-group">
+        <label>Year</label>
+        <select id="leaderYear"></select>
+      </div>
+      <div class="control-group">
+        <label>Stat</label>
+        <select id="leaderStat">
+          <option value="HR">Home Runs</option>
+          <option value="H">Hits</option>
+          <option value="RBI">RBIs</option>
+          <option value="R">Runs</option>
+          <option value="SB">Stolen Bases</option>
+          <option value="SO_pitch">Strikeouts (Pitching)</option>
+          <option value="W">Wins (Pitching)</option>
+          <option value="SV">Saves (Pitching)</option>
+        </select>
+      </div>
+      <button onclick="renderLeaders()">Show Leaders</button>
+    </div>
+    <div class="grid">
+      <div class="card"><h3>Top 15</h3><canvas id="chartLeaders"></canvas></div>
+      <div class="card"><h3>Leaderboard Table</h3><div class="table-wrapper" id="leadersTable"></div></div>
+    </div>
+  </div>
+
+  <!-- COMPARE TAB -->
+  <div class="dashboard" id="tab-compare">
+    <div class="controls">
+      <div class="control-group search-wrap">
+        <label>Player 1</label>
+        <input type="text" id="cmpSearch1" placeholder="Search..." autocomplete="off">
+        <div class="search-results" id="cmpResults1"></div>
+      </div>
+      <div class="control-group search-wrap">
+        <label>Player 2</label>
+        <input type="text" id="cmpSearch2" placeholder="Search..." autocomplete="off">
+        <div class="search-results" id="cmpResults2"></div>
+      </div>
+      <button onclick="renderCompare()">Compare</button>
+    </div>
+    <div id="compareContent">
+      <div class="grid">
+        <div class="card"><h3>Home Runs by Season</h3><canvas id="chartCmpHR"></canvas></div>
+        <div class="card"><h3>Batting Average by Season</h3><canvas id="chartCmpBA"></canvas></div>
+        <div class="card"><h3>RBIs by Season</h3><canvas id="chartCmpRBI"></canvas></div>
+        <div class="card"><h3>Hits by Season</h3><canvas id="chartCmpH"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let people = [], batting = [], pitching = [], teams = [];
+    let peopleMap = {};
+    let charts = {};
+    let selectedPlayer = null;
+    let cmpPlayer1 = null, cmpPlayer2 = null;
+
+    const COLORS = {
+      accent: '#38bdf8', accent2: '#f472b6', accent3: '#34d399', accent4: '#fbbf24',
+      grid: 'rgba(148,163,184,0.1)', gridText: '#94a3b8'
+    };
+
+    const chartDefaults = {
+      responsive: true,
+      plugins: { legend: { labels: { color: COLORS.gridText } } },
+      scales: {
+        x: { ticks: { color: COLORS.gridText }, grid: { color: COLORS.grid } },
+        y: { ticks: { color: COLORS.gridText }, grid: { color: COLORS.grid } }
+      }
+    };
+
+    function loadCSV(path) {
+      return new Promise((resolve, reject) => {
+        Papa.parse(path, {
+          download: true, header: true, dynamicTyping: true, skipEmptyLines: true,
+          complete: r => resolve(r.data),
+          error: e => reject(e)
+        });
+      });
+    }
+
+    async function init() {
+      const el = document.getElementById('loadingText');
+      el.textContent = 'Loading People...';
+      people = await loadCSV('data/People.csv');
+      el.textContent = 'Loading Batting...';
+      batting = await loadCSV('data/Batting.csv');
+      el.textContent = 'Loading Pitching...';
+      pitching = await loadCSV('data/Pitching.csv');
+      el.textContent = 'Loading Teams...';
+      teams = await loadCSV('data/Teams.csv');
+
+      people.forEach(p => { if (p.playerID) peopleMap[p.playerID] = p; });
+
+      // Populate leader year select
+      const years = [...new Set(batting.map(b => b.yearID).filter(Boolean))].sort((a, b) => b - a);
+      const sel = document.getElementById('leaderYear');
+      years.forEach(y => { const o = document.createElement('option'); o.value = y; o.textContent = y; sel.appendChild(o); });
+
+      document.getElementById('loading').classList.add('hidden');
+      renderOverview();
+      setupTabs();
+      setupSearch();
+    }
+
+    function setupTabs() {
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+          document.querySelectorAll('.dashboard').forEach(d => d.classList.remove('active'));
+          tab.classList.add('active');
+          document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+        });
+      });
+    }
+
+    function destroyChart(id) {
+      if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+    }
+
+    function makeChart(id, config) {
+      destroyChart(id);
+      const ctx = document.getElementById(id).getContext('2d');
+      charts[id] = new Chart(ctx, config);
+    }
+
+    // ---- OVERVIEW ----
+    function renderOverview() {
+      const yFrom = +document.getElementById('overviewYearFrom').value;
+      const yTo = +document.getElementById('overviewYearTo').value;
+      const bat = batting.filter(b => b.yearID >= yFrom && b.yearID <= yTo);
+      const pit = pitching.filter(p => p.yearID >= yFrom && p.yearID <= yTo);
+
+      // Aggregate by year
+      const byYear = {};
+      bat.forEach(b => {
+        const y = b.yearID;
+        if (!byYear[y]) byYear[y] = { HR: 0, H: 0, AB: 0, BB: 0, SO: 0, R: 0, players: new Set() };
+        byYear[y].HR += (b.HR || 0);
+        byYear[y].H += (b.H || 0);
+        byYear[y].AB += (b.AB || 0);
+        byYear[y].BB += (b.BB || 0);
+        byYear[y].SO += (b.SO || 0);
+        byYear[y].R += (b.R || 0);
+        if (b.playerID) byYear[y].players.add(b.playerID);
+      });
+
+      const eraByYear = {};
+      pit.forEach(p => {
+        const y = p.yearID;
+        if (!eraByYear[y]) eraByYear[y] = { totalER: 0, totalIP: 0 };
+        eraByYear[y].totalER += (p.ER || 0);
+        eraByYear[y].totalIP += (p.IPouts || 0) / 3;
+      });
+
+      const years = Object.keys(byYear).map(Number).sort((a, b) => a - b);
+      const hrData = years.map(y => byYear[y].HR);
+      const baData = years.map(y => byYear[y].AB > 0 ? (byYear[y].H / byYear[y].AB).toFixed(3) : 0);
+      const soData = years.map(y => byYear[y].SO);
+      const bbData = years.map(y => byYear[y].BB);
+      const eraYears = Object.keys(eraByYear).map(Number).sort((a, b) => a - b);
+      const eraData = eraYears.map(y => eraByYear[y].totalIP > 0 ? ((eraByYear[y].totalER / eraByYear[y].totalIP) * 9).toFixed(2) : 0);
+
+      // Stat cards
+      const totalHR = Object.values(byYear).reduce((s, v) => s + v.HR, 0);
+      const totalH = Object.values(byYear).reduce((s, v) => s + v.H, 0);
+      const totalR = Object.values(byYear).reduce((s, v) => s + v.R, 0);
+      const uniquePlayers = new Set(); Object.values(byYear).forEach(v => v.players.forEach(p => uniquePlayers.add(p)));
+
+      document.getElementById('overviewStats').innerHTML = `
+        <div class="stat-card"><div class="label">Total Home Runs</div><div class="value">${totalHR.toLocaleString()}</div></div>
+        <div class="stat-card"><div class="label">Total Hits</div><div class="value">${totalH.toLocaleString()}</div></div>
+        <div class="stat-card"><div class="label">Total Runs</div><div class="value">${totalR.toLocaleString()}</div></div>
+        <div class="stat-card"><div class="label">Unique Players</div><div class="value">${uniquePlayers.size.toLocaleString()}</div></div>
+        <div class="stat-card"><div class="label">Seasons Covered</div><div class="value">${years.length}</div></div>
+      `;
+
+      makeChart('chartHR', {
+        type: 'line', data: {
+          labels: years,
+          datasets: [{ label: 'Home Runs', data: hrData, borderColor: COLORS.accent, backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3, pointRadius: 0 }]
+        }, options: { ...chartDefaults }
+      });
+
+      makeChart('chartBA', {
+        type: 'line', data: {
+          labels: years,
+          datasets: [{ label: 'Batting Avg', data: baData, borderColor: COLORS.accent3, backgroundColor: 'rgba(52,211,153,0.1)', fill: true, tension: 0.3, pointRadius: 0 }]
+        }, options: { ...chartDefaults }
+      });
+
+      makeChart('chartSOBB', {
+        type: 'line', data: {
+          labels: years,
+          datasets: [
+            { label: 'Strikeouts', data: soData, borderColor: COLORS.accent2, tension: 0.3, pointRadius: 0 },
+            { label: 'Walks', data: bbData, borderColor: COLORS.accent4, tension: 0.3, pointRadius: 0 }
+          ]
+        }, options: { ...chartDefaults }
+      });
+
+      makeChart('chartERA', {
+        type: 'line', data: {
+          labels: eraYears,
+          datasets: [{ label: 'ERA', data: eraData, borderColor: COLORS.accent4, backgroundColor: 'rgba(251,191,36,0.1)', fill: true, tension: 0.3, pointRadius: 0 }]
+        }, options: { ...chartDefaults }
+      });
+    }
+
+    // ---- PLAYER LOOKUP ----
+    function setupSearch() {
+      setupPlayerSearch('playerSearch', 'playerResults', id => { selectedPlayer = id; renderPlayer(); });
+      setupPlayerSearch('cmpSearch1', 'cmpResults1', id => { cmpPlayer1 = id; document.getElementById('cmpSearch1').value = formatName(id); });
+      setupPlayerSearch('cmpSearch2', 'cmpResults2', id => { cmpPlayer2 = id; document.getElementById('cmpSearch2').value = formatName(id); });
+    }
+
+    function setupPlayerSearch(inputId, resultsId, onSelect) {
+      const input = document.getElementById(inputId);
+      const results = document.getElementById(resultsId);
+      input.addEventListener('input', () => {
+        const q = input.value.toLowerCase().trim();
+        if (q.length < 2) { results.classList.remove('show'); return; }
+        const matches = people.filter(p => p.nameFirst && p.nameLast &&
+          (p.nameFirst.toLowerCase() + ' ' + p.nameLast.toLowerCase()).includes(q)
+        ).slice(0, 15);
+        results.innerHTML = matches.map(p =>
+          `<div data-id="${p.playerID}">${p.nameFirst} ${p.nameLast} (${p.debut ? p.debut.substring(0, 4) : '?'}–${p.finalGame ? p.finalGame.substring(0, 4) : '?'})</div>`
+        ).join('');
+        results.classList.add('show');
+        results.querySelectorAll('div').forEach(d => {
+          d.addEventListener('click', () => {
+            onSelect(d.dataset.id);
+            input.value = d.textContent;
+            results.classList.remove('show');
+          });
+        });
+      });
+      document.addEventListener('click', e => { if (!input.contains(e.target) && !results.contains(e.target)) results.classList.remove('show'); });
+    }
+
+    function formatName(id) {
+      const p = peopleMap[id];
+      return p ? `${p.nameFirst} ${p.nameLast}` : id;
+    }
+
+    function renderPlayer() {
+      if (!selectedPlayer) return;
+      const p = peopleMap[selectedPlayer];
+      const pBat = batting.filter(b => b.playerID === selectedPlayer).sort((a, b) => a.yearID - b.yearID);
+      const pPit = pitching.filter(b => b.playerID === selectedPlayer).sort((a, b) => a.yearID - b.yearID);
+
+      // Aggregate by year for multi-stint seasons
+      const batByYear = {};
+      pBat.forEach(b => {
+        const y = b.yearID;
+        if (!batByYear[y]) batByYear[y] = { G: 0, AB: 0, R: 0, H: 0, '2B': 0, '3B': 0, HR: 0, RBI: 0, BB: 0, SO: 0, SB: 0 };
+        for (const k of ['G','AB','R','H','2B','3B','HR','RBI','BB','SO','SB']) batByYear[y][k] += (b[k] || 0);
+      });
+
+      const careerAB = Object.values(batByYear).reduce((s, v) => s + v.AB, 0);
+      const careerH = Object.values(batByYear).reduce((s, v) => s + v.H, 0);
+      const careerHR = Object.values(batByYear).reduce((s, v) => s + v.HR, 0);
+      const careerRBI = Object.values(batByYear).reduce((s, v) => s + v.RBI, 0);
+      const careerBA = careerAB > 0 ? (careerH / careerAB).toFixed(3) : '—';
+
+      let html = `<div class="player-header">
+        <h2>${p.nameFirst} ${p.nameLast}</h2>
+        <div class="meta">Born: ${p.birthYear || '?'} | B/T: ${p.bats || '?'}/${p.throws || '?'} | Debut: ${p.debut || '?'} | Final: ${p.finalGame || '?'}</div>
+      </div>`;
+
+      html += `<div class="stat-cards">
+        <div class="stat-card"><div class="label">Career AVG</div><div class="value">${careerBA}</div></div>
+        <div class="stat-card"><div class="label">Career HR</div><div class="value">${careerHR.toLocaleString()}</div></div>
+        <div class="stat-card"><div class="label">Career RBI</div><div class="value">${careerRBI.toLocaleString()}</div></div>
+        <div class="stat-card"><div class="label">Career Hits</div><div class="value">${careerH.toLocaleString()}</div></div>
+      </div>`;
+
+      html += `<div class="grid">
+        <div class="card"><h3>HR by Season</h3><canvas id="playerHR"></canvas></div>
+        <div class="card"><h3>Batting Avg by Season</h3><canvas id="playerBA"></canvas></div>
+      </div>`;
+
+      if (Object.keys(batByYear).length > 0) {
+        const batYears = Object.keys(batByYear).map(Number).sort((a, b) => a - b);
+        html += `<div class="card" style="margin-top:1.5rem"><h3>Season-by-Season Batting</h3><div class="table-wrapper"><table>
+          <tr><th>Year</th><th>G</th><th>AB</th><th>R</th><th>H</th><th>2B</th><th>3B</th><th>HR</th><th>RBI</th><th>BB</th><th>SO</th><th>SB</th><th>AVG</th></tr>
+          ${batYears.map(y => {
+            const s = batByYear[y];
+            const avg = s.AB > 0 ? (s.H / s.AB).toFixed(3) : '—';
+            return `<tr><td>${y}</td><td>${s.G}</td><td>${s.AB}</td><td>${s.R}</td><td>${s.H}</td><td>${s['2B']}</td><td>${s['3B']}</td><td>${s.HR}</td><td>${s.RBI}</td><td>${s.BB}</td><td>${s.SO}</td><td>${s.SB}</td><td>${avg}</td></tr>`;
+          }).join('')}
+        </table></div></div>`;
+      }
+
+      document.getElementById('playerContent').innerHTML = html;
+
+      // Render charts
+      const batYears = Object.keys(batByYear).map(Number).sort((a, b) => a - b);
+      if (batYears.length > 0) {
+        makeChart('playerHR', {
+          type: 'bar', data: {
+            labels: batYears,
+            datasets: [{ label: 'HR', data: batYears.map(y => batByYear[y].HR), backgroundColor: COLORS.accent }]
+          }, options: { ...chartDefaults }
+        });
+        makeChart('playerBA', {
+          type: 'line', data: {
+            labels: batYears,
+            datasets: [{ label: 'AVG', data: batYears.map(y => batByYear[y].AB > 0 ? (batByYear[y].H / batByYear[y].AB).toFixed(3) : 0), borderColor: COLORS.accent3, tension: 0.3 }]
+          }, options: { ...chartDefaults }
+        });
+      }
+    }
+
+    // ---- LEADERBOARDS ----
+    function renderLeaders() {
+      const year = +document.getElementById('leaderYear').value;
+      const stat = document.getElementById('leaderStat').value;
+      let data;
+      let statKey = stat;
+
+      if (stat === 'SO_pitch' || stat === 'W' || stat === 'SV') {
+        statKey = stat === 'SO_pitch' ? 'SO' : stat;
+        const pitYear = pitching.filter(p => p.yearID === year);
+        const agg = {};
+        pitYear.forEach(p => {
+          if (!agg[p.playerID]) agg[p.playerID] = 0;
+          agg[p.playerID] += (p[statKey] || 0);
+        });
+        data = Object.entries(agg).map(([id, val]) => ({ playerID: id, val })).sort((a, b) => b.val - a.val).slice(0, 15);
+      } else {
+        const batYear = batting.filter(b => b.yearID === year);
+        const agg = {};
+        batYear.forEach(b => {
+          if (!agg[b.playerID]) agg[b.playerID] = 0;
+          agg[b.playerID] += (b[statKey] || 0);
+        });
+        data = Object.entries(agg).map(([id, val]) => ({ playerID: id, val })).sort((a, b) => b.val - a.val).slice(0, 15);
+      }
+
+      const names = data.map(d => formatName(d.playerID));
+      const values = data.map(d => d.val);
+      const statLabel = document.getElementById('leaderStat').selectedOptions[0].textContent;
+
+      makeChart('chartLeaders', {
+        type: 'bar', data: {
+          labels: names,
+          datasets: [{ label: statLabel, data: values, backgroundColor: COLORS.accent }]
+        }, options: {
+          ...chartDefaults, indexAxis: 'y',
+          plugins: { legend: { display: false } }
+        }
+      });
+
+      document.getElementById('leadersTable').innerHTML = `<table>
+        <tr><th>#</th><th>Player</th><th>${statLabel}</th></tr>
+        ${data.map((d, i) => `<tr><td>${i + 1}</td><td>${formatName(d.playerID)}</td><td>${d.val}</td></tr>`).join('')}
+      </table>`;
+    }
+
+    // ---- COMPARE ----
+    function renderCompare() {
+      if (!cmpPlayer1 || !cmpPlayer2) return;
+
+      function getPlayerBatByYear(id) {
+        const map = {};
+        batting.filter(b => b.playerID === id).forEach(b => {
+          const y = b.yearID;
+          if (!map[y]) map[y] = { AB: 0, H: 0, HR: 0, RBI: 0, R: 0 };
+          for (const k of ['AB', 'H', 'HR', 'RBI', 'R']) map[y][k] += (b[k] || 0);
+        });
+        return map;
+      }
+
+      const d1 = getPlayerBatByYear(cmpPlayer1);
+      const d2 = getPlayerBatByYear(cmpPlayer2);
+      const allYears = [...new Set([...Object.keys(d1), ...Object.keys(d2)])].map(Number).sort((a, b) => a - b);
+
+      const name1 = formatName(cmpPlayer1), name2 = formatName(cmpPlayer2);
+
+      function cmpChart(canvasId, label, fn) {
+        makeChart(canvasId, {
+          type: 'line', data: {
+            labels: allYears,
+            datasets: [
+              { label: name1, data: allYears.map(y => d1[y] ? fn(d1[y]) : null), borderColor: COLORS.accent, tension: 0.3, spanGaps: true },
+              { label: name2, data: allYears.map(y => d2[y] ? fn(d2[y]) : null), borderColor: COLORS.accent2, tension: 0.3, spanGaps: true }
+            ]
+          }, options: { ...chartDefaults }
+        });
+      }
+
+      cmpChart('chartCmpHR', 'HR', d => d.HR);
+      cmpChart('chartCmpBA', 'AVG', d => d.AB > 0 ? +(d.H / d.AB).toFixed(3) : null);
+      cmpChart('chartCmpRBI', 'RBI', d => d.RBI);
+      cmpChart('chartCmpH', 'Hits', d => d.H);
+    }
+
+    init();
+  </script>
+</body>
+</html>
