@@ -290,14 +290,55 @@
         <div class="card"><h3>Hits by Season</h3><canvas id="chartCmpH"></canvas></div>
       </div>
     </div>
+  <!-- PLAYER VALUE TAB -->
+  <div class="dashboard" id="tab-value">
+    <div class="controls">
+      <div class="control-group search-wrap">
+        <label>Search Player</label>
+        <input type="text" id="valueSearch" placeholder="e.g. Alex Rodriguez" autocomplete="off">
+        <div class="search-results" id="valueResults"></div>
+      </div>
+      <div class="control-group">
+        <label>Value Metric</label>
+        <select id="valueMetric">
+          <option value="war_approx">Approx WAR (Batting)</option>
+          <option value="ops">OPS</option>
+          <option value="hr">Home Runs</option>
+          <option value="rbi">RBIs</option>
+          <option value="h">Hits</option>
+        </select>
+      </div>
+      <button onclick="renderValue()">Analyze Value</button>
+    </div>
+    <p style="color:var(--muted);font-size:0.8rem;margin-bottom:1rem;">Salary data available 1985–2016. Value metrics compare production to cost.</p>
+    <div id="valueContent"></div>
+    <div style="margin-top:1.5rem;">
+      <div class="grid">
+        <div class="card"><h3>Best Value Players (Lowest $/WAR) — Top 25</h3><div class="table-wrapper" id="bestValueTable"></div></div>
+        <div class="card"><h3>Most Overpaid (Highest $/WAR) — Top 25</h3><div class="table-wrapper" id="worstValueTable"></div></div>
+      </div>
+      <div class="controls" style="margin-top:1.5rem;">
+        <div class="control-group">
+          <label>Year</label>
+          <select id="valueYear"></select>
+        </div>
+        <button onclick="renderValueLeaders()">Show Year Rankings</button>
+      </div>
+      <div class="grid" style="margin-top:1rem;">
+        <div class="card"><h3>Salary vs Production Scatter</h3><canvas id="chartValueScatter"></canvas></div>
+        <div class="card"><h3>Top Value That Year</h3><div class="table-wrapper" id="yearValueTable"></div></div>
+      </div>
+    </div>
   </div>
 
   <script>
-    let people = [], batting = [], pitching = [], teams = [];
+    let people = [], batting = [], pitching = [], teams = [], salaries = [];
     let peopleMap = {};
     let charts = {};
     let selectedPlayer = null;
+    let selectedValuePlayer = null;
     let cmpPlayer1 = null, cmpPlayer2 = null;
+    let salaryMap = {};
 
     const COLORS = {
       accent: '#38bdf8', accent2: '#f472b6', accent3: '#34d399', accent4: '#fbbf24',
@@ -333,13 +374,28 @@
       pitching = await loadCSV('data/Pitching.csv');
       el.textContent = 'Loading Teams...';
       teams = await loadCSV('data/Teams.csv');
+      el.textContent = 'Loading Salaries...';
+      salaries = await loadCSV('data/Salaries.csv');
 
       people.forEach(p => { if (p.playerID) peopleMap[p.playerID] = p; });
+
+      // Build salary lookup: playerID -> { year -> salary }
+      salaryMap = {};
+      salaries.forEach(s => {
+        if (!s.playerID) return;
+        if (!salaryMap[s.playerID]) salaryMap[s.playerID] = {};
+        salaryMap[s.playerID][s.yearID] = (salaryMap[s.playerID][s.yearID] || 0) + (s.salary || 0);
+      });
 
       // Populate leader year select
       const years = [...new Set(batting.map(b => b.yearID).filter(Boolean))].sort((a, b) => b - a);
       const sel = document.getElementById('leaderYear');
       years.forEach(y => { const o = document.createElement('option'); o.value = y; o.textContent = y; sel.appendChild(o); });
+
+      // Populate value year select (salary years only)
+      const salYears = [...new Set(salaries.map(s => s.yearID).filter(Boolean))].sort((a, b) => b - a);
+      const valSel = document.getElementById('valueYear');
+      salYears.forEach(y => { const o = document.createElement('option'); o.value = y; o.textContent = y; valSel.appendChild(o); });
 
       document.getElementById('loading').classList.add('hidden');
       renderOverview();
@@ -538,6 +594,7 @@
       setupPlayerSearch('playerSearch', 'playerResults', id => { selectedPlayer = id; renderPlayer(); });
       setupPlayerSearch('cmpSearch1', 'cmpResults1', id => { cmpPlayer1 = id; document.getElementById('cmpSearch1').value = formatName(id); });
       setupPlayerSearch('cmpSearch2', 'cmpResults2', id => { cmpPlayer2 = id; document.getElementById('cmpSearch2').value = formatName(id); });
+      setupPlayerSearch('valueSearch', 'valueResults', id => { selectedValuePlayer = id; renderValue(); });
     }
 
     function setupPlayerSearch(inputId, resultsId, onSelect) {
@@ -720,6 +777,200 @@
       cmpChart('chartCmpBA', 'AVG', d => d.AB > 0 ? +(d.H / d.AB).toFixed(3) : null);
       cmpChart('chartCmpRBI', 'RBI', d => d.RBI);
       cmpChart('chartCmpH', 'Hits', d => d.H);
+    }
+
+    // ---- PLAYER VALUE ----
+    // Approximate WAR for a single batting season (simplified):
+    // Uses runs created above average approach
+    function approxBattingWAR(s) {
+      if (!s || s.AB < 50) return 0;
+      const pa = s.AB + s.BB + s.HBP + s.SF;
+      if (pa === 0) return 0;
+      const obp = (s.H + s.BB + s.HBP) / pa;
+      const tb = (s.H - s['2B'] - s['3B'] - s.HR) + 2 * s['2B'] + 3 * s['3B'] + 4 * s.HR;
+      const slg = tb / s.AB;
+      const ops = obp + slg;
+      // League avg OPS ~.720; 10 runs per win; ~0.05 OPS = 1 run per 25 PA
+      const runsAboveAvg = (ops - 0.720) * pa * 0.17;
+      const war = runsAboveAvg / 10;
+      return +war.toFixed(1);
+    }
+
+    function getPlayerSeasonStats(playerID, year) {
+      const rows = batting.filter(b => b.playerID === playerID && b.yearID === year);
+      if (rows.length === 0) return null;
+      const s = { AB: 0, H: 0, '2B': 0, '3B': 0, HR: 0, RBI: 0, R: 0, BB: 0, SO: 0, SB: 0, HBP: 0, SF: 0, G: 0 };
+      rows.forEach(b => { for (const k in s) s[k] += (b[k] || 0); });
+      return s;
+    }
+
+    function renderValue() {
+      if (!selectedValuePlayer) return;
+      const p = peopleMap[selectedValuePlayer];
+      const pSalary = salaryMap[selectedValuePlayer] || {};
+      const salYears = Object.keys(pSalary).map(Number).sort((a, b) => a - b);
+
+      if (salYears.length === 0) {
+        document.getElementById('valueContent').innerHTML = `<div class="player-header"><h2>${p.nameFirst} ${p.nameLast}</h2><div class="meta">No salary data available for this player (data covers 1985–2016).</div></div>`;
+        return;
+      }
+
+      const metric = document.getElementById('valueMetric').value;
+      const seasonData = salYears.map(y => {
+        const stats = getPlayerSeasonStats(selectedValuePlayer, y);
+        const salary = pSalary[y];
+        let production = 0, prodLabel = '';
+        if (stats) {
+          if (metric === 'war_approx') { production = approxBattingWAR(stats); prodLabel = 'WAR'; }
+          else if (metric === 'ops') {
+            const pa = stats.AB + stats.BB + stats.HBP + stats.SF;
+            const obp = pa > 0 ? (stats.H + stats.BB + stats.HBP) / pa : 0;
+            const tb = (stats.H - stats['2B'] - stats['3B'] - stats.HR) + 2 * stats['2B'] + 3 * stats['3B'] + 4 * stats.HR;
+            const slg = stats.AB > 0 ? tb / stats.AB : 0;
+            production = +(obp + slg).toFixed(3); prodLabel = 'OPS';
+          }
+          else if (metric === 'hr') { production = stats.HR; prodLabel = 'HR'; }
+          else if (metric === 'rbi') { production = stats.RBI; prodLabel = 'RBI'; }
+          else if (metric === 'h') { production = stats.H; prodLabel = 'Hits'; }
+        }
+        const costPer = (metric === 'war_approx' && production > 0) ? salary / production : null;
+        return { year: y, salary, production, prodLabel, costPer, stats };
+      });
+
+      const totalSalary = seasonData.reduce((s, d) => s + d.salary, 0);
+      const totalProd = seasonData.reduce((s, d) => s + d.production, 0);
+      const prodLabel = seasonData[0]?.prodLabel || 'WAR';
+      const avgCostPer = (metric === 'war_approx' && totalProd > 0) ? totalSalary / totalProd : null;
+
+      let html = `<div class="player-header">
+        <h2>${p.nameFirst} ${p.nameLast}</h2>
+        <div class="meta">Salary data: ${salYears[0]}–${salYears[salYears.length - 1]} | B/T: ${p.bats || '?'}/${p.throws || '?'}</div>
+      </div>`;
+
+      html += `<div class="stat-cards">
+        <div class="stat-card"><div class="label">Total Earnings</div><div class="value">$${(totalSalary / 1e6).toFixed(1)}M</div></div>
+        <div class="stat-card"><div class="label">Total ${prodLabel}</div><div class="value">${typeof totalProd === 'number' && totalProd % 1 !== 0 ? totalProd.toFixed(1) : totalProd}</div></div>
+        ${avgCostPer !== null ? `<div class="stat-card"><div class="label">Avg $/WAR</div><div class="value">$${(avgCostPer / 1e6).toFixed(2)}M</div></div>` : ''}
+        <div class="stat-card"><div class="label">Seasons w/ Salary</div><div class="value">${salYears.length}</div></div>
+      </div>`;
+
+      html += `<div class="grid">
+        <div class="card"><h3>Salary vs ${prodLabel} Over Time</h3><canvas id="chartValuePlayer"></canvas></div>
+        <div class="card"><h3>${metric === 'war_approx' ? '$/WAR' : 'Salary'} Over Time</h3><canvas id="chartValueCost"></canvas></div>
+      </div>`;
+
+      html += `<div class="card" style="margin-top:1.5rem"><h3>Season-by-Season Value Breakdown</h3><div class="table-wrapper"><table>
+        <tr><th>Year</th><th>Salary</th><th>${prodLabel}</th><th>G</th><th>AB</th><th>H</th><th>HR</th><th>RBI</th>${metric === 'war_approx' ? '<th>$/WAR</th>' : ''}</tr>
+        ${seasonData.map(d => {
+          const s = d.stats || {};
+          const costStr = d.costPer !== null && d.costPer !== Infinity && d.production > 0 ? '$' + (d.costPer / 1e6).toFixed(2) + 'M' : '—';
+          return `<tr><td>${d.year}</td><td>$${(d.salary / 1e6).toFixed(2)}M</td><td>${typeof d.production === 'number' && d.production % 1 !== 0 ? d.production.toFixed(1) : d.production}</td><td>${s.G || 0}</td><td>${s.AB || 0}</td><td>${s.H || 0}</td><td>${s.HR || 0}</td><td>${s.RBI || 0}</td>${metric === 'war_approx' ? `<td>${costStr}</td>` : ''}</tr>`;
+        }).join('')}
+      </table></div></div>`;
+
+      document.getElementById('valueContent').innerHTML = html;
+
+      // Charts
+      makeChart('chartValuePlayer', {
+        type: 'bar', data: {
+          labels: salYears,
+          datasets: [
+            { label: 'Salary ($M)', data: seasonData.map(d => +(d.salary / 1e6).toFixed(2)), backgroundColor: 'rgba(56,189,248,0.6)', yAxisID: 'y' },
+            { label: prodLabel, data: seasonData.map(d => d.production), type: 'line', borderColor: COLORS.accent3, yAxisID: 'y1', tension: 0.3 }
+          ]
+        }, options: {
+          ...chartDefaults,
+          scales: {
+            x: chartDefaults.scales.x,
+            y:  { position: 'left',  ticks: { color: COLORS.gridText }, grid: { color: COLORS.grid }, title: { display: true, text: 'Salary ($M)', color: COLORS.gridText } },
+            y1: { position: 'right', ticks: { color: COLORS.gridText }, grid: { drawOnChartArea: false }, title: { display: true, text: prodLabel, color: COLORS.gridText } }
+          }
+        }
+      });
+
+      if (metric === 'war_approx') {
+        const costData = seasonData.map(d => d.costPer !== null && d.production > 0 ? +(d.costPer / 1e6).toFixed(2) : null);
+        makeChart('chartValueCost', {
+          type: 'line', data: {
+            labels: salYears,
+            datasets: [{ label: '$/WAR ($M)', data: costData, borderColor: COLORS.accent4, backgroundColor: 'rgba(251,191,36,0.1)', fill: true, tension: 0.3 }]
+          }, options: { ...chartDefaults, scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, title: { display: true, text: '$/WAR ($M)', color: COLORS.gridText } } } }
+        });
+      } else {
+        makeChart('chartValueCost', {
+          type: 'line', data: {
+            labels: salYears,
+            datasets: [{ label: 'Salary ($M)', data: seasonData.map(d => +(d.salary / 1e6).toFixed(2)), borderColor: COLORS.accent4, backgroundColor: 'rgba(251,191,36,0.1)', fill: true, tension: 0.3 }]
+          }, options: { ...chartDefaults }
+        });
+      }
+    }
+
+    function renderValueLeaders() {
+      const year = +document.getElementById('valueYear').value;
+
+      // Get all players with salary that year
+      const salYear = salaries.filter(s => s.yearID === year && s.salary > 0);
+      const playerSeasons = salYear.map(s => {
+        const stats = getPlayerSeasonStats(s.playerID, year);
+        const war = approxBattingWAR(stats);
+        return { playerID: s.playerID, salary: s.salary, war, stats };
+      }).filter(d => d.stats && d.stats.AB >= 100);
+
+      // Best value: lowest $/WAR among positive WAR players
+      const bestValue = playerSeasons
+        .filter(d => d.war >= 1)
+        .map(d => ({ ...d, costPerWAR: d.salary / d.war }))
+        .sort((a, b) => a.costPerWAR - b.costPerWAR)
+        .slice(0, 25);
+
+      // Most overpaid: highest $/WAR (including negative/zero WAR with high salary)
+      const overpaid = playerSeasons
+        .map(d => ({ ...d, costPerWAR: d.war > 0 ? d.salary / d.war : d.salary * 10 }))
+        .sort((a, b) => b.costPerWAR - a.costPerWAR)
+        .slice(0, 25);
+
+      function valueTable(data) {
+        return `<table>
+          <tr><th>#</th><th>Player</th><th>Salary</th><th>WAR</th><th>$/WAR</th></tr>
+          ${data.map((d, i) => `<tr><td>${i + 1}</td><td>${formatName(d.playerID)}</td><td>$${(d.salary / 1e6).toFixed(2)}M</td><td>${d.war.toFixed(1)}</td><td>$${(d.war > 0 ? (d.salary / d.war / 1e6).toFixed(2) : '—')}${d.war > 0 ? 'M' : ''}</td></tr>`).join('')}
+        </table>`;
+      }
+
+      document.getElementById('bestValueTable').innerHTML = valueTable(bestValue);
+      document.getElementById('worstValueTable').innerHTML = valueTable(overpaid);
+
+      // Scatter: salary vs WAR
+      const scatterData = playerSeasons.map(d => ({ x: d.war, y: +(d.salary / 1e6).toFixed(2), label: formatName(d.playerID) }));
+      makeChart('chartValueScatter', {
+        type: 'scatter', data: {
+          datasets: [{
+            label: 'Players',
+            data: scatterData,
+            backgroundColor: 'rgba(56,189,248,0.5)',
+            pointRadius: 4
+          }]
+        }, options: {
+          ...chartDefaults,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: ctx => `${scatterData[ctx.dataIndex].label}: ${ctx.parsed.x} WAR, $${ctx.parsed.y}M`
+              }
+            }
+          },
+          scales: {
+            x: { ...chartDefaults.scales.x, title: { display: true, text: 'Approx WAR', color: COLORS.gridText } },
+            y: { ...chartDefaults.scales.y, title: { display: true, text: 'Salary ($M)', color: COLORS.gridText } }
+          }
+        }
+      });
+
+      document.getElementById('yearValueTable').innerHTML = `<table>
+        <tr><th>#</th><th>Player</th><th>Salary</th><th>WAR</th><th>$/WAR</th></tr>
+        ${bestValue.slice(0, 15).map((d, i) => `<tr><td>${i + 1}</td><td>${formatName(d.playerID)}</td><td>$${(d.salary / 1e6).toFixed(2)}M</td><td>${d.war.toFixed(1)}</td><td>$${(d.costPerWAR / 1e6).toFixed(2)}M</td></tr>`).join('')}
+      </table>`;
     }
 
     init();
